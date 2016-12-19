@@ -11,6 +11,7 @@ module VpcJump
     option '--name', 'INSTANCE NAME', 'EC2 instance name of jump box'
     option '--ngrok-token', 'NGROK TOKEN', 'ngrok auth token'
     option '--ngrok-region', 'NGROK REGION', 'ngrok region', default: 'us'
+    option '--ssh-user', 'SSH USER', 'SSH user', default: 'ec2-user'
     option ['-v', '--verbose'], :flag, 'Output AWS API calls'
 
     subcommand 'kill', 'Terminate ngrok tunnel' do
@@ -23,7 +24,6 @@ module VpcJump
     end
 
     subcommand 'ssh', 'SSH into the jumpbox' do
-      option '--ssh-user', 'SSH USER', 'SSH user', default: 'ec2-user'
       parameter '[SSHPARAMS] ...', 'Arguments to pass to SSH'
 
       def default_sshparams_list
@@ -33,27 +33,28 @@ module VpcJump
       def execute
         Aws.config[:logger] = Logger.new($stdout) if verbose?
 
-        id = instance_id
+        uri = ssh_uri
+        cmd = "ssh -p #{uri.port} #{sshparams_list.join(' ')} #{ssh_user}@#{uri.hostname}"
 
-        ssm_exec id, "ngrok tcp --log stdout --region #{ngrok_region} --authtoken #{ngrok_token} 22"
-        sleep 20
+        puts cmd if verbose?
+        exec cmd
+      end
+    end
 
-        tunnels = []
+    subcommand 'sshuttle', 'Use jumpbox for sshuttle VPN' do
+      def execute
+        Aws.config[:logger] = Logger.new($stdout) if verbose?
 
-        loop do
-          resp = ssm_exec id, 'curl -s http://localhost:4040/api/tunnels'
-          output = ssm_output resp.command_id
-          json = JSON.parse output
-          tunnels = json['tunnels']
-          break if tunnels.length > 0
-        end
+        ec2 = Aws::EC2::Client.new
 
-        url = tunnels[0]['public_url']
-        uri = URI.parse url
-        port = uri.port
-        host = uri.hostname
+        instance_info = ec2.describe_instances instance_ids: [instance_id]
+        vpc_id = instance_info.reservations[0].instances[0].vpc_id
+        vpc_info = ec2.describe_vpcs vpc_ids: [vpc_id]
+        cidr = vpc_info.vpcs[0].cidr_block
 
-        cmd = "ssh -p #{port} #{sshparams_list.join(' ')} #{ssh_user}@#{host}"
+        uri = ssh_uri
+        cmd = "sshuttle -r #{ssh_user}@#{uri.hostname}:#{uri.port} #{cidr}"
+
         puts cmd if verbose?
         exec cmd
       end
@@ -71,6 +72,26 @@ module VpcJump
       )
 
       resp.command
+    end
+
+    def ssh_uri
+      id = instance_id
+
+      ssm_exec id, "ngrok tcp --log stdout --region #{ngrok_region} --authtoken #{ngrok_token} 22"
+      sleep 20
+
+      tunnels = []
+
+      loop do
+        resp = ssm_exec id, 'curl -s http://localhost:4040/api/tunnels'
+        output = ssm_output resp.command_id
+        json = JSON.parse output
+        tunnels = json['tunnels']
+        break if tunnels.length > 0
+      end
+
+      url = tunnels[0]['public_url']
+      URI.parse url
     end
 
     def ssm_output(command_id)

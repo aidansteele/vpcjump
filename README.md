@@ -16,8 +16,9 @@ When on step 3 (**Configure Instance Details**), expand **Advanced Details** and
 
 ```
 #!/bin/bash
+REGION=`curl http://169.254.169.254/latest/dynamic/instance-identity/document|grep region|awk -F\" '{print $4}'`
 cd /tmp
-curl https://amazon-ssm-ap-southeast-2.s3.amazonaws.com/latest/linux_amd64/amazon-ssm-agent.rpm -o amazon-ssm-agent.rpm
+curl https://amazon-ssm-${REGION}.s3.amazonaws.com/latest/linux_amd64/amazon-ssm-agent.rpm -o amazon-ssm-agent.rpm
 yum install -y amazon-ssm-agent.rpm
 curl https://bin.equinox.io/c/4VmDzA7iaHb/ngrok-stable-linux-amd64.zip -o ngrok.zip
 unzip ngrok.zip
@@ -52,12 +53,14 @@ Parameters:
 Subcommands:
     kill                          Terminate ngrok tunnel
     ssh                           SSH into the jumpbox
+    sshuttle                      Use jumpbox for sshuttle VPN
 
 Options:
     --instance-id INSTANCE ID     EC2 instance id of jump box (e.g. i-abc123)
     --name INSTANCE NAME          EC2 instance name of jump box
     --ngrok-token NGROK TOKEN     ngrok auth token
     --ngrok-region NGROK REGION   ngrok region (default: "us")
+    --ssh-user SSH USER           SSH user (default: "ec2-user")
     -v, --verbose                 Output AWS API calls
     -h, --help                    print help
     
@@ -67,12 +70,11 @@ Usage:
 
 Parameters:
     [SSHPARAMS] ...               Arguments to pass to SSH
-
-Options:
-    --ssh-user SSH USER           SSH user (default: "ec2-user")
 ```
 
-Often you will want to use the jumpbox as an intermediary in order to connect to a second instance. This can be done using SSH port forwarding, e.g. `vpcjump --ngrok-token <auth token> --instance-id i-abc123 ssh -- -L 3389:172.16.0.1:3389` - This will let you to connect to Microsoft Remote Desktop on 127.0.0.1 and it will connect to the remote instance!
+Often you will want to use the jumpbox as an intermediary in order to connect to a second instance. This can be done using SSH port forwarding, e.g. `vpcjump --ngrok-token <auth token> --instance-id i-abc123 ssh -- -L 3389:172.16.0.1:3389` - This will let you to connect to Microsoft Remote Desktop on 127.0.0.1 and it will connect to the remote instance.
+
+Even better is [`sshuttle`](http://sshuttle.readthedocs.io/en/stable/). It transparently creates a VPN-like connection over SSH and allows you to connect to resources within the VPC directly. Simply type `vpcjump --ngrok-token <auth token> --instance-id i-abc123 sshuttle`. Then you can type something like `ssh ec2-user@172.16.0.1` in another window and you're in. 👍
 
 Finally, you may wish to terminate the jumpbox tunnel early. This can be done as such: `vpcjump --instance-id i-abc123 kill`. 
 
@@ -85,3 +87,14 @@ Finally, you may wish to terminate the jumpbox tunnel early. This can be done as
 * Execute `ssh -p <ngrok port> <ssh user>@<ngrok host>` to log into your jumpbox through the ngrok tunnel. 
 * Use SSM to execute `killall ngrok` on the remote instance when you explicitly terminate the tunnel. If you don't do this, the SSM agent process on the remote instance will terminate the ngrok tunnel after a predefined period.
 
+
+## Required permissions
+
+To use `vpcjump` once you have a jumpbox up and running you will need the following permissions:
+
+* `ssm:SendCommand`
+* `ssm:ListCommandInvocations`
+* `ec2:DescribeInstances`
+* `ec2:DescribeVpcs`
+
+The last two are only required for the `sshuttle` subcommand to determine the VPC CIDR block that you are jumping into.
